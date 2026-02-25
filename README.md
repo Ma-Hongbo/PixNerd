@@ -62,6 +62,26 @@ python main.py fit -c configs_c2i/pix256std1_repa_pixnerd_xl.yaml
 ```
 For T2i, we use GenEval and DPG to collect metrics.
 
+### C2I Training with Visualization (main / newnerd)
+
+Both `main` and `newnerd` branches support the same training entry:
+
+```bash
+# training with visualization artifacts
+bash scripts/train_c2i_with_viz.sh fit configs_c2i/pix256std1_repa_pixnerd_xl.yaml
+
+# prediction with visualization artifacts
+bash scripts/train_c2i_with_viz.sh predict configs_c2i/pix256std1_repa_pixnerd_xl.yaml --ckpt_path=XXX.ckpt
+```
+
+Visualization outputs during `val/predict`:
+
+- Raw samples: `${trainer.default_root_dir}/val/...`
+- Preview grid PNG: `${trainer.default_root_dir}/val/.../val_preview_step*.png` or `predict_preview_step*.png`
+- Compressed NPZ (when `save_compressed=true`): `${trainer.default_root_dir}/val/.../output.npz`
+
+If your config uses `WandbLogger` or `TensorBoardLogger`, preview grids are also logged automatically.
+
 ## Reference
 ```bibtex
 @article{2507.23268,
