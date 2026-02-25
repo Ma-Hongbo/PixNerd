@@ -13,7 +13,7 @@ set -euo pipefail
 #   $3 RUN_NAME    : wandb run name (default: c2i-<timestamp>)
 #   $4 PROJECT     : wandb project (default: pixnerd-c2i)
 #   $5 CONFIG      : config path (default: configs_c2i/pix256_c2i_wandb_100step.yaml)
-#   $6 DINO_PATH   : local torch.hub DINOv2 path (default: $DINO_WEIGHT_PATH)
+#   $6 DINO_PATH   : optional local torch.hub DINOv2 path; if omitted, use $DINO_WEIGHT_PATH
 #   $7... EXTRA    : extra LightningCLI overrides
 
 MODE="${1:-fit}"
@@ -25,14 +25,25 @@ DATA_ROOT="${2:-datasets/imagenette2-320/train}"
 RUN_NAME="${3:-c2i-$(date +%y%m%d-%H%M%S)}"
 PROJECT="${4:-pixnerd-c2i}"
 CONFIG="${5:-configs_c2i/pix256_c2i_wandb_100step.yaml}"
-DINO_PATH="${6:-${DINO_WEIGHT_PATH:-}}"
-shift $(( $# > 0 ? 1 : 0 ))
-shift $(( $# > 0 ? 1 : 0 ))
-shift $(( $# > 0 ? 1 : 0 ))
-shift $(( $# > 0 ? 1 : 0 ))
-shift $(( $# > 0 ? 1 : 0 ))
-shift $(( $# > 0 ? 1 : 0 ))
+RAW_ARG6="${6:-}"
+DINO_PATH="${DINO_WEIGHT_PATH:-}"
+SHIFT_N=5
+if [[ -n "${RAW_ARG6}" && "${RAW_ARG6}" != --* ]]; then
+  DINO_PATH="${RAW_ARG6}"
+  SHIFT_N=6
+fi
+for ((i=0; i<SHIFT_N && $#>0; i++)); do
+  shift
+done
 EXTRA_ARGS=("$@")
+
+has_tags_exp_override=false
+for arg in "${EXTRA_ARGS[@]}"; do
+  if [[ "${arg}" == "--tags.exp" || "${arg}" == --tags.exp=* ]]; then
+    has_tags_exp_override=true
+    break
+  fi
+done
 
 if [[ "${MODE}" != "fit" && "${MODE}" != "predict" ]]; then
   echo "[ERROR] MODE must be fit or predict, got: ${MODE}"
@@ -73,6 +84,8 @@ echo "[INFO] Config: ${CONFIG}"
 echo "[INFO] Data root: ${DATA_ROOT}"
 echo "[INFO] DINO path: ${DINO_PATH}"
 echo "[INFO] Wandb project/run: ${PROJECT}/${RUN_NAME}"
+TAG_EXP_SANITIZED="$(echo "${RUN_NAME}" | sed 's#[/: ]#_#g')"
+echo "[INFO] tags.exp: ${TAG_EXP_SANITIZED}"
 if [[ -n "${CUDA_VISIBLE_DEVICES:-}" ]]; then
   echo "[INFO] CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES}"
 fi
@@ -85,6 +98,10 @@ cmd=(
   --trainer.logger.init_args.project "${PROJECT}"
   --trainer.logger.init_args.name "${RUN_NAME}"
 )
+
+if [[ "${has_tags_exp_override}" == "false" ]]; then
+  cmd+=(--tags.exp "${TAG_EXP_SANITIZED}")
+fi
 
 if [[ ${#EXTRA_ARGS[@]} -gt 0 ]]; then
   cmd+=("${EXTRA_ARGS[@]}")

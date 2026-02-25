@@ -74,6 +74,8 @@ bash scripts/train_c2i_with_viz.sh fit configs_c2i/pix256std1_repa_pixnerd_xl.ya
 bash scripts/train_c2i_with_viz.sh predict configs_c2i/pix256std1_repa_pixnerd_xl.yaml --ckpt_path=XXX.ckpt
 ```
 
+`scripts/train_c2i_with_viz.sh` auto-sets a unique `--tags.exp` by timestamp unless you pass `--tags.exp` manually.
+
 Visualization outputs during `val/predict`:
 
 - Raw samples: `${trainer.default_root_dir}/val/...`
@@ -103,6 +105,8 @@ export DINO_WEIGHT_PATH=/path/to/facebookresearch_dinov2_main/dinov2_vitb14
 # 4) train (checkpoint every 100 steps + preview images)
 bash scripts/train_c2i_wandb_100step.sh fit datasets/imagenette2-320/train my-run pixnerd-c2i
 ```
+
+`scripts/train_c2i_wandb_100step.sh` auto-sets `--tags.exp` from `RUN_NAME` unless you pass `--tags.exp` manually.
 
 Default behavior of `pix256_c2i_wandb_100step.yaml`:
 
