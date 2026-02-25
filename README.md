@@ -82,6 +82,34 @@ Visualization outputs during `val/predict`:
 
 If your config uses `WandbLogger` or `TensorBoardLogger`, preview grids are also logged automatically.
 
+### C2I Training with W&B + 100-step Checkpoints
+
+We provide a ready-to-run config and scripts:
+
+- Config: `configs_c2i/pix256_c2i_wandb_100step.yaml`
+- Download quick-start dataset: `scripts/download_c2i_dataset.sh`
+- Train script: `scripts/train_c2i_wandb_100step.sh`
+
+```bash
+# 1) download dataset (Imagenette, ImageFolder format)
+bash scripts/download_c2i_dataset.sh
+
+# 2) set wandb key
+export WANDB_API_KEY=YOUR_WANDB_KEY
+
+# 3) train (checkpoint every 100 steps + preview images)
+bash scripts/train_c2i_wandb_100step.sh fit datasets/imagenette2-320/train my-run pixnerd-c2i
+```
+
+Default behavior of `pix256_c2i_wandb_100step.yaml`:
+
+- `WandbLogger` enabled
+- checkpoint every 100 steps
+- validation every 100 steps
+- preview grid image generated and logged
+
+For full ImageNet-1K training, set your own `data.train_dataset.init_args.root` path in command line or config.
+
 ## Reference
 ```bibtex
 @article{2507.23268,
