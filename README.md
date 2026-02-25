@@ -97,7 +97,10 @@ bash scripts/download_c2i_dataset.sh
 # 2) set wandb key
 export WANDB_API_KEY=YOUR_WANDB_KEY
 
-# 3) train (checkpoint every 100 steps + preview images)
+# 3) set local DINOv2 weight path (required by REPATrainer)
+export DINO_WEIGHT_PATH=/path/to/facebookresearch_dinov2_main/dinov2_vitb14
+
+# 4) train (checkpoint every 100 steps + preview images)
 bash scripts/train_c2i_wandb_100step.sh fit datasets/imagenette2-320/train my-run pixnerd-c2i
 ```
 
