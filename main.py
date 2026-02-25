@@ -15,6 +15,7 @@ logger = logging.getLogger("lightning.pytorch")
 # log_path = os.path.join( f"log.txt")
 # logger.addHandler(logging.FileHandler(log_path))
 
+# 将训练配置保存到输出目录，方便实验复现
 class ReWriteRootSaveConfigCallback(SaveConfigCallback):
     def save_config(self, trainer: Trainer, pl_module: LightningModule, stage: str) -> None:
         stamp = time.strftime('%y%m%d%H%M')
@@ -33,39 +34,48 @@ class ReWriteRootDirCli(LightningCLI):
         if self.subcommand == "predict":
             config_trainer.logger = None
 
+    # 添加自定义命令行参数，添加 --tags.exp 参数，用于标记实验名称
     def add_arguments_to_parser(self, parser: LightningArgumentParser) -> None:
         class TagsClass:
             def __init__(self, exp:str):
                 ...
         parser.add_class_arguments(TagsClass, nested_key="tags")
 
+    # 添加默认参数 --torch_hub_dir: 设置 Torch Hub 缓存目录 --huggingface_cache_dir: 设置 HuggingFace 模型缓存目录
     def add_default_arguments_to_parser(self, parser: LightningArgumentParser) -> None:
         super().add_default_arguments_to_parser(parser)
         parser.add_argument("--torch_hub_dir", type=str, default=None, help=("torch hub dir"),)
         parser.add_argument("--huggingface_cache_dir", type=str, default=None, help=("huggingface hub dir"),)
 
+    # 核心逻辑
     def instantiate_trainer(self, **kwargs: Any) -> Trainer:
         config_trainer = self._get(self.config_init, "trainer", default={})
         default_root_dir = config_trainer.get("default_root_dir", None)
 
+        # 1. 设置默认输出目录
         if default_root_dir is None:
             default_root_dir = os.path.join(os.getcwd(), "workdirs")
 
+        # 2. 根据 tags 构建目录名
         dirname = ""
         for v, k in self._get(self.config, "tags", default={}).items():
             dirname += f"{v}_{k}"
         default_root_dir = os.path.join(default_root_dir, dirname)
+        
+        # 3. 检查目录是否已存在
         is_resume = self._get(self.config_init, "ckpt_path", default=None)
         if os.path.exists(default_root_dir) and "debug" not in default_root_dir:
             if os.listdir(default_root_dir) and self.subcommand != "predict" and not is_resume:
                 raise FileExistsError(f"{default_root_dir} already exists")
 
+        # ** 4. 创建并返回 Trainer **
         config_trainer.default_root_dir = default_root_dir
         trainer = super().instantiate_trainer(**kwargs)
         if trainer.is_global_zero:
             os.makedirs(default_root_dir, exist_ok=True)
         return trainer
 
+    # 配置模型缓存路径，避免下载到默认位置
     def instantiate_classes(self) -> None:
         torch_hub_dir = self._get(self.config, "torch_hub_dir")
         huggingface_cache_dir = self._get(self.config, "huggingface_cache_dir")
