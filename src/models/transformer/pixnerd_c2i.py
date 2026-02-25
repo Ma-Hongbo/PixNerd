@@ -248,43 +248,69 @@ class NerfEmbedder(nn.Module):
         return inputs
 
 
-class NerfBlock(nn.Module):
-    def __init__(self, hidden_size_s, hidden_size_x, mlp_ratio=4):
+class SharedPointEncoder(nn.Module):
+    def __init__(self, hidden_size_x, mlp_ratio=2):
         super().__init__()
-        self.param_generator1 = nn.Sequential(
-            nn.Linear(hidden_size_s, 2*hidden_size_x**2*mlp_ratio, bias=True),
-        )
         self.norm = RMSNorm(hidden_size_x, eps=1e-6)
-        self.mlp_ratio = mlp_ratio
-    def forward(self, x, s):
-        batch_size, num_x, hidden_size_x = x.shape
-        mlp_params1 = self.param_generator1(s)
-        fc1_param1, fc2_param1 = mlp_params1.chunk(2, dim=-1)
-        fc1_param1 = fc1_param1.view(batch_size, hidden_size_x, hidden_size_x*self.mlp_ratio)
-        fc2_param1 = fc2_param1.view(batch_size, hidden_size_x*self.mlp_ratio, hidden_size_x)
+        hidden = int(hidden_size_x * mlp_ratio)
+        self.fc1 = nn.Linear(hidden_size_x, hidden, bias=True)
+        self.fc2 = nn.Linear(hidden, hidden_size_x, bias=True)
 
-        # normalize fc1
-        normalized_fc1_param1 = torch.nn.functional.normalize(fc1_param1, dim=-2)
-        # normalize fc2
-        normalized_fc2_param1 = torch.nn.functional.normalize(fc2_param1, dim=-2)
-        # mlp 1
+    def forward(self, x):
         res_x = x
         x = self.norm(x)
-        x = torch.bmm(x, normalized_fc1_param1)
+        x = self.fc1(x)
         x = torch.nn.functional.silu(x)
-        x = torch.bmm(x, normalized_fc2_param1)
-        x = x + res_x
-        return x
+        x = self.fc2(x)
+        return x + res_x
 
-class NerfFinalLayer(nn.Module):
-    def __init__(self, hidden_size, out_channels):
+
+class PatchConditionHead(nn.Module):
+    def __init__(self, hidden_size_s, condition_size):
         super().__init__()
-        self.norm = RMSNorm(hidden_size, eps=1e-6)
-        self.linear = nn.Linear(hidden_size, out_channels, bias=True)
-    def forward(self, x):
-        x = self.norm(x)
-        x = self.linear(x)
-        return x
+        self.net = nn.Sequential(
+            nn.Linear(hidden_size_s, condition_size, bias=True),
+            nn.SiLU(),
+            nn.Linear(condition_size, condition_size, bias=True),
+        )
+
+    def forward(self, s):
+        return self.net(s)
+
+
+class ConditionedPointEncoder(nn.Module):
+    def __init__(self, hidden_size_x, condition_size, mlp_ratio=2):
+        super().__init__()
+        self.norm = RMSNorm(hidden_size_x, eps=1e-6)
+        hidden = int(hidden_size_x * mlp_ratio)
+        self.fc1 = nn.Linear(hidden_size_x, hidden, bias=True)
+        self.fc2 = nn.Linear(hidden, hidden_size_x, bias=True)
+        self.cond_proj = nn.Linear(condition_size, 3 * hidden_size_x, bias=True)
+
+    def forward(self, x, condition):
+        shift, scale, gate = self.cond_proj(condition).chunk(3, dim=-1)
+        shift = shift[:, None, :]
+        scale = scale[:, None, :]
+        gate = gate[:, None, :]
+        res_x = x
+        x = modulate(self.norm(x), shift, scale)
+        x = self.fc1(x)
+        x = torch.nn.functional.silu(x)
+        x = self.fc2(x)
+        return res_x + gate * x
+
+
+class ConditionedQueryHead(nn.Module):
+    def __init__(self, hidden_size_x, out_channels, condition_size):
+        super().__init__()
+        self.norm = RMSNorm(hidden_size_x, eps=1e-6)
+        self.cond_proj = nn.Linear(condition_size, 2 * hidden_size_x, bias=True)
+        self.linear = nn.Linear(hidden_size_x, out_channels, bias=True)
+
+    def forward(self, x, condition):
+        shift, scale = self.cond_proj(condition).chunk(2, dim=-1)
+        x = modulate(self.norm(x), shift[:, None, :], scale[:, None, :])
+        return self.linear(x)
 
 class PixNerDiT(nn.Module):
     def __init__(
@@ -312,22 +338,26 @@ class PixNerDiT(nn.Module):
         self.num_groups = num_groups
         self.num_blocks = num_blocks
         self.num_cond_blocks = num_cond_blocks
+        self.num_decoder_blocks = self.num_blocks - self.num_cond_blocks
         self.patch_size = patch_size
         self.x_embedder = NerfEmbedder(in_channels, hidden_size_x, max_freqs=8)
         self.s_embedder = Embed(in_channels*patch_size**2, hidden_size, bias=True)
         self.t_embedder = TimestepEmbedder(hidden_size)
         self.y_embedder = LabelEmbedder(num_classes+1, hidden_size)
-
-        self.final_layer = NerfFinalLayer(hidden_size_x, self.out_channels)
+        self.condition_size = hidden_size_x
+        self.patch_condition_head = PatchConditionHead(self.hidden_size, self.condition_size)
+        self.shared_point_encoder = SharedPointEncoder(hidden_size_x, nerf_mlpratio)
+        self.decoder_blocks = nn.ModuleList([
+            ConditionedPointEncoder(hidden_size_x, self.condition_size, nerf_mlpratio)
+            for _ in range(self.num_decoder_blocks)
+        ])
+        self.final_layer = ConditionedQueryHead(hidden_size_x, self.out_channels, self.condition_size)
 
         self.weight_path = weight_path
 
         self.load_ema = load_ema
         self.blocks = nn.ModuleList([
             FlattenDiTBlock(self.hidden_size, self.num_groups) for _ in range(self.num_cond_blocks)
-        ])
-        self.blocks.extend([
-            NerfBlock(self.hidden_size, hidden_size_x, nerf_mlpratio) for _ in range(self.num_cond_blocks, self.num_blocks)
         ])
         self.initialize_weights()
         self.precompute_pos = dict()
@@ -361,6 +391,7 @@ class PixNerDiT(nn.Module):
     def forward(self, x, t, y, s=None, mask=None):
         B, _, H, W = x.shape
         pos = self.fetch_pos(H//self.patch_size, W//self.patch_size, x.device)
+        # 把图像拆成了patch token
         x = torch.nn.functional.unfold(x, kernel_size=self.patch_size, stride=self.patch_size).transpose(1, 2)
         t = self.t_embedder(t.view(-1)).view(B, -1, self.hidden_size)
         y = self.y_embedder(y).view(B, 1, self.hidden_size)
@@ -374,10 +405,12 @@ class PixNerDiT(nn.Module):
         x = x.reshape(batch_size*length, self.in_channels, self.patch_size**2)
         x = x.transpose(1, 2)
         s = s.view(batch_size*length, self.hidden_size)
+        condition = self.patch_condition_head(s)
         x = self.x_embedder(x)
-        for i in range(self.num_cond_blocks, self.num_blocks):
-            x = self.blocks[i](x, s)
-        x = self.final_layer(x)
+        x = self.shared_point_encoder(x)
+        for block in self.decoder_blocks:
+            x = block(x, condition)
+        x = self.final_layer(x, condition)
         x = x.transpose(1, 2)
         x = x.reshape(batch_size, length, -1)
         x = torch.nn.functional.fold(x.transpose(1, 2).contiguous(), (H, W), kernel_size=self.patch_size, stride=self.patch_size)
